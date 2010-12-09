@@ -1,8 +1,7 @@
 ;;; yatest.el --- simple test framework
-;; -*- coding: utf-8 -*-
 ;; Copyright (C) 2008  Free Software Foundation, Inc.
 
-;; Author:  <lieutar@1dk.jp>
+;; Author:  <lieutar at 1dk.jp>
 ;; Keywords: 
 
 ;; This file is free software; you can redistribute it and/or modify
@@ -22,7 +21,6 @@
 
 ;;; Commentary:
 
-;; TODO symbol-plist を使ってハッシュテーブルがわりにしているものをハッシュテーブルにする
 
 ;;; Code:
 
@@ -52,8 +50,8 @@
          (toggle-read-only 1)
          (goto-char (point-min))
          (pop-to-buffer *buffer* t t)
-         (recursive-edit)))
-     )))
+         (recursive-edit))))))
+
 (put 'yatest-util::popup 'lisp-indent-function 'defun)
 
 (defun yatest-util::a (&rest args)
@@ -76,51 +74,11 @@
   (set-text-properties 0 (length str) props str)
   str)
 
-(defun yatest-util::stext (&rest text-spec)
-  "Builds structed text that specified by TEXT-SPEC."
-  (let* ((stack          (list text-spec))
-         (retval         "")
-         (context        (make-symbol "*context*"))
-         (context-stack  (list context)))
 
-    (while stack
-      (let ((src (car stack)))
-        (setq stack (cdr stack))
-        (while src
-          (let ((node (car src)))
-            (setq src (cdr src))
+(defvar yatest-failed nil)
+(defvar yatest-report nil)
 
-            (cond ((stringp node)
-                   (let ((plist (symbol-plist context)))
-                     (setq retval
-                           (concat retval
-                                   (if plist
-                                       (apply
-                                        'yatest-util::text-with-properties
-                                              (cons node plist))
-                                     node)))))
-
-                  ((symbolp node)
-                   (let ((val (car src)))
-                     (setq src (cdr src))
-                     (when (eq val '<<)
-                       (setq val (get (car context-stack) node)))
-                     (put context node val)))
-
-                  ((listp   node)
-                   (setq stack         (cons src    stack))
-                   (setq context-stack (cons context context-stack))
-                   (setq context       (make-symbol "*context*"))
-                   (setq src           node)))))
-
-        (setq context       (car context-stack))
-        (setq context-stack (cdr context-stack))))
-    retval))
-
-(defvar failed nil)
-(defvar report nil)
-
-(defconst yatest::tests () "symbol for plist of tests.")
+(defconst yatest::tests (make-hash-table :test 'eq) "yatest test db.")
 
 (defface  yatest::ok-face
   '((((class color) (background light))
@@ -128,7 +86,8 @@
     (((class color) (background dark))
      (:foreground "black" :background "green"))
     (t ()))
-  "")
+  ""
+  :group 'yatest)
 
 (defface  yatest::faild-face 
   '((((class color) (background light))
@@ -136,7 +95,8 @@
     (((class color) (background dark))
      (:foreground "white" :background "red"))
     (t ()))
-  "")
+  ""
+  :group 'yatest)
 
 
 (defface  yatest::print-face 
@@ -145,7 +105,8 @@
     (((class color) (background dark))
      (:foreground "white" :background "blue"))
     (t ()))
-  "")
+  ""
+  :group 'yatest)
 
 (defface yatest::trace-odd-face
   '((((class color) (background light))
@@ -153,7 +114,8 @@
     (((class color) (background dark))
      (:foreground "cyan" ))
     (t ()))
-  "")
+  ""
+  :group 'yatest)
 
 (defface yatest::trace-even-face
   '((((class color) (background light))
@@ -161,14 +123,13 @@
     (((class color) (background dark))
      (:foreground "yellow" ))
     (t ()))
-  "")
-
-
+  ""
+  :group 'yatest)
 
 (defmacro yatest::p (name &rest x)
   ""
   `(let ((*ret* (progn ,@x)))
-     (setq report (cons (cons :print (cons ,name *ret*)) report))
+     (setq yatest-report (cons (cons :print (cons ,name *ret*)) yatest-report))
      *ret*))
 
 (defun yatest::build-traced-line (trace)
@@ -190,16 +151,14 @@
                         (setq drop nil))
                   (if (> 1 skip)
                       (setq all
-                            (yatest-util::stext
+                            (concat
                              all
                              "\n"
-			     (list
-			      'face
-			      (if (= 0 (mod depth 2))
-				  'yatest::trace-even-face
-				 'yatest::trace-odd-face)
-			      (yatest::build-traced-line
-			       trace))))
+			     (propertize
+                              (yatest::build-traced-line  trace)
+			      'face (if (= 0 (mod depth 2))
+                                        'yatest::trace-even-face
+                                      'yatest::trace-odd-face))))
                     (setq skip (1- skip)))))
               (setq trace (backtrace-frame depth))
               (setq depth (1+ depth))
@@ -235,57 +194,104 @@
 							args
 							1))))
 		  (catch 'yatest->eval (eval (cons 'progn x))))))
-    (setq report
+    (setq yatest-report
 	  (cons (if (eq result t)
                     `(:ok ,name)
-		  (progn (setq failed (1+ failed))
-			 `(:failed ,name ,(or result "failed"))))
-		report))))
+		  (progn (setq yatest-failed (1+ yatest-failed))
+			 `(:failed ,name ,(or result "yatest-failed"))))
+		yatest-report))))
 
 (defmacro yatest (name &rest x)
   ""
   `(yatest::assert1 ',name ',x))
 
 (defun yatest::run-test::debugger (&rest debugger-args)
-  (setq failed (1+ failed))
+  (setq yatest-failed (1+ yatest-failed))
   (yatest::backtrace 'yatest::run-test->eval
-                            debugger-args
-			    1))
+                     debugger-args
+                     1))
 
+(defconst yatest::-old-debugger nil)
+(defconst yatest::-report-ready nil)
+(defconst yatest::-waiting-continuation
+(defmacro yatest::-waiting (cont)
+  `(let ((yatest::-waiting-continuation
+          (lambda ()
+            (if yatest::-report-ready
+                (progn
+                  ,@cont)
+              (run-at-time "0.5 sec" nil yatest::-waiting-continuation)
+              )))
+         (funcall yatest::-waiting-continuation))))
+(defun yatest::done ()
+  (setq yatest::-report-ready t))
+
+"
+TODO 非同期テストの実装
+"
 (defun yatest::run-test (reporter project name all)
   "Runs provided test."
-  (let* ((report  ())
-	 (errors  ())
-	 (failed  0)
-         (debugger 'yatest::run-test::debugger)
-         (err (catch 'yatest::run-test->eval
-                (eval (append '(progn)
-                              all
-                              '(nil))))))
-    (if err (setq report
-		  (cons (list :failed "*** FATAL ERROR ***" err) report)))
-    (apply reporter (list project name failed (reverse report)))))
+  (let*
+      (
+       (yatest-report  ())
+       (yatest-failed  0)
+       (errors         ())
+       (debugger       'yatest::run-test::debugger)
+       (err            nil)
+       )
+    (setq yatest::-report-ready nil)
+    (setq err
+          (catch 'yatest::run-test->eval
+              (eval (append '(progn)
+                            all
+                            '(nil)))))
+
+    (if err (setq yatest-report
+		  (cons (list :failed "*** FATAL ERROR ***" err)
+                        yatest-report)))
+
+    (yatest::-waiting
+     (apply reporter (list project
+                           name
+                           yatest-failed
+                           (reverse yatest-report))))))
 
 
 
 (defconst yatest::report-mode-map
-  (let ((m (make-keymap)))
+  (let ((m (make-sparse-keymap)))
     (define-key m "q" 'top-level)
     m))
-
 
 (defun yatest::report-mode ()
   (use-local-map yatest::report-mode-map))
 
+
+(defmacro yatest::async (&rest body)
+  ""
+  )
+
+(defmacro yatest::define-async-test (project name &rest body)
+  ""
+  `(puthash ',name
+            ,@body
+            ,(or (gethash ',project yatest::tests)
+                 (let ((hash (make-hash-table :test 'eq)))
+                   (puthash ',project hash yatest::tests)
+                   hash))))
+
 (defmacro yatest::define-test (project name &rest body)
   "Defines new test as belongs the PROJECT."
-  `(progn
-     (let ((dic (or (get 'yatest::tests ',project)
-		      (let ((sym (make-symbol (symbol-name ',project))))
-			(put 'yatest::tests ',project sym)
-			sym))))
-       (put dic ',name ',body))))
-(put 'yatest::define-test 'lisp-indent-function 'defun)
+  `(yatest::define-async-test project name (progn ,@body (yatest::done))))
+
+(put 'yatest::define-test       'lisp-indent-function 'defun)
+(put 'yatest::define-async-test 'lisp-indent-function 'defun)
+(put 'yatest::async             'lisp-indent-function 'defun)
+
+(defmacro yatest::define-async-test (project name &rest body)
+  "Defines new asynchronous test."
+  ;; TODO 非同期テストの定義を書く
+  )
 
 (defun yatest::report-single (project name failed report)
   "Reports result of a test."
@@ -295,18 +301,19 @@
       (lambda (r)
 	(case (car r)
 	  ((:ok)
-	   (yatest-util::stext
-	    `(face yatest::ok-face ,(format "%s ... ok!" (cadr r)))))
+	   (propertize
+            (format "%s ... ok!" (cadr r)) 'face 'yatest::ok-face ))
 
 	  ((:print)
-	   (yatest-util::stext
-	    `(face yatest::print-face ,(format "%s :" (cadr r)))
+           (concat 
+            (propertize
+             (format "%s :" (cadr r)) 'face 'yatest::print-face)
 	    (format "%S" (cddr r))))
 
 	  ((:failed)
-	   (yatest-util::stext
-	    `(face   yatest::faild-face
-	     ,(format "%s :" (cadr r)))
+	   (concat
+	    (propertize
+             (format "%s :" (cadr r)) 'face   'yatest::faild-face)
 	    (format " %s" (caddr r)))))
 	)
       report
@@ -317,20 +324,26 @@
 
 (defun yatest::project-alist ()
   "Returns all project names as alist."
-  (let((src (symbol-plist 'yatest::tests))
-       (ret ()))
-    (while src
-      (setq ret (cons  (list (symbol-name (car src))) ret))
-      (setq src (cdr (cdr src))))
+  (let((ret ()))
+    (maphash
+     (lambda (key val)
+       (setq ret (cons (list key val) ret)))
+     yatest::tests)
     ret))
 
 (defun yatest::test-alist (project)
   "Returns alist of test that bound PROJECT."
-  (yatest-util::plist-to-alist
-   (symbol-plist (get 'yatest::tests project))))
+  (let ((ret ()))
+    (maphash
+     (lambda (key val)
+       (setq ret (cons (cons key val) ret)))
+     (or (gethash project yatest::tests)
+         (make-hash-table)))
+    ret))
 
 (defun yatest::run (project &optional name reporter)
   "Runs all tests what belongs the PROJECT."
+
   (interactive
    (let* ((prj (intern (completing-read "project: "
 				       (yatest::project-alist) nil t)))
@@ -339,33 +352,39 @@
 	  (name (completing-read
 		 "test: "  cands nil t)))
      (list prj (if (equal name "") nil (intern name)))))
+
   (let ((alist (yatest::test-alist project)))
     (if name
 	(progn
 	  (yatest::run-test (or reporter
-				   (function yatest::report-single))
-			       project
-			       name
-			       (cdr (assoc name alist))))
+                                (function yatest::report-single))
+                            project
+                            name
+                            (cdr (assoc name alist))))
       (let ((result ())
-	    (failed 0))
+	    (yatest-failed 0))
 
 	(mapcar (lambda (x)
 		  (yatest::run-test
 		   (lambda (project name fail report)
 		     (setq result
-			   (cons (list (if (> fail 0) 
-					 (progn (setq failed (1+ failed))
-                                                :failed)
-					 :ok) name) result)))
+			   (cons
+                            (list
+                             (if (> fail 0) 
+                                 (progn (setq yatest-failed (1+ yatest-failed))
+                                        :failed)
+                               :ok) name) result)))
 		   project
 		   (car x)
 		   (cdr x)))
 		alist)
 
 	(when (interactive-p)
-	    (yatest::report-single project '*ALL* failed result))
-	  (cons failed result)))))
+	    (yatest::report-single project '*ALL* yatest-failed result))
+	  (cons yatest-failed result)))))
 
 (provide 'yatest)
 ;;; yatest.el ends here.
+;;; Local Variables:
+;;; coding: utf-8
+;;; End:
