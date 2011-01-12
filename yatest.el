@@ -29,8 +29,8 @@
     (define-key m "q"
       (lambda ()
         (interactive)
-	(kill-buffer (current-buffer))
-	(top-level)))
+        (kill-buffer (current-buffer))
+        (top-level)))
     m))
 
 (defun yatest-util::popup::popup-mode ()
@@ -64,8 +64,8 @@
   (let ((retval ()))
     (while plist
       (setq retval (cons (cons (car  plist)
-			       (cadr plist))
-			 retval))
+                               (cadr plist))
+                         retval))
       (setq plist (cddr plist)))
     (reverse retval)))
 
@@ -129,7 +129,9 @@
 (defmacro yatest::p (name &rest x)
   ""
   `(let ((*ret* (progn ,@x)))
-     (setq yatest-report (cons (cons :print (cons ,name *ret*)) yatest-report))
+     (setq yatest-report (cons 
+                          (cons :print (cons ,name *ret*))
+                          yatest-report))
      *ret*))
 
 (defun yatest::build-traced-line (trace)
@@ -154,9 +156,9 @@
                             (concat
                              all
                              "\n"
-			     (propertize
+                             (propertize
                               (yatest::build-traced-line  trace)
-			      'face (if (= 0 (mod depth 2))
+                              'face (if (= 0 (mod depth 2))
                                         'yatest::trace-even-face
                                       'yatest::trace-odd-face))))
                     (setq skip (1- skip)))))
@@ -170,36 +172,39 @@
 (defun yatest::backtrace (cont debugger-args &optional skip)
   ""
   (let* ((old-local-map (current-local-map))
-	 (tmp-map (make-keymap))
-	 (len     (length (cadr tmp-map)))
-	 (tbl     (make-vector len (lambda ()
-				     (interactive)
-				     (message "Continue ...")
-				     (run-with-timer 0.125 nil
-                                                     'exit-recursive-edit))))
-	 (pos     1))
+         (tmp-map (make-keymap))
+         (len     (length (cadr tmp-map)))
+         (tbl     (make-vector
+                   len
+                   (lambda ()
+                     (interactive)
+                     (message "Continue ...")
+                     (run-with-timer 0.125 nil
+                                     'exit-recursive-edit))))
+         (pos     1))
     (aset tbl 0 t)
     (setcar (cdr tmp-map) tbl)
     (use-local-map tmp-map)
     (message "\"yatest\" caught an error. Push any key...")
     (recursive-edit)
     (use-local-map old-local-map)
+    (yatest::done)
     (throw cont (yatest::backtrace1 cont debugger-args skip))))
 
 
 (defsubst yatest::assert1 (name x)
   ""
   (let ((result (let ((debugger (lambda (&rest args)
-				  (yatest::backtrace 'yatest->eval
-							args
-							1))))
-		  (catch 'yatest->eval (eval (cons 'progn x))))))
+                                  (yatest::backtrace 'yatest->eval
+                                                        args
+                                                        1))))
+                  (catch 'yatest->eval (eval (cons 'progn x))))))
     (setq yatest-report
-	  (cons (if (eq result t)
+          (cons (if (eq result t)
                     `(:ok ,name)
-		  (progn (setq yatest-failed (1+ yatest-failed))
-			 `(:failed ,name ,(or result "yatest-failed"))))
-		yatest-report))))
+                  (progn (setq yatest-failed (1+ yatest-failed))
+                         `(:failed ,name ,(or result "yatest-failed"))))
+                yatest-report))))
 
 (defmacro yatest (name &rest x)
   ""
@@ -213,16 +218,8 @@
 
 (defconst yatest::-old-debugger nil)
 (defconst yatest::-report-ready nil)
-(defconst yatest::-waiting-continuation
-(defmacro yatest::-waiting (cont)
-  `(let ((yatest::-waiting-continuation
-          (lambda ()
-            (if yatest::-report-ready
-                (progn
-                  ,@cont)
-              (run-at-time "0.5 sec" nil yatest::-waiting-continuation)
-              )))
-         (funcall yatest::-waiting-continuation))))
+(defconst yatest::-waiting-continuation nil)
+
 (defun yatest::done ()
   (setq yatest::-report-ready t))
 
@@ -247,14 +244,20 @@ TODO 非同期テストの実装
                             '(nil)))))
 
     (if err (setq yatest-report
-		  (cons (list :failed "*** FATAL ERROR ***" err)
+                  (cons (list :failed "*** FATAL ERROR ***" err)
                         yatest-report)))
 
-    (yatest::-waiting
-     (apply reporter (list project
-                           name
-                           yatest-failed
-                           (reverse yatest-report))))))
+    (let ((yatest::-waiting-continuation
+           `(lambda ()
+              (if yatest::-report-ready
+                  (apply ',reporter
+                         (list `,project
+                               `,name
+                               yatest-failed
+                               (reverse yatest-report))))
+              (run-at-time "0.5 sec" nil yatest::-waiting-continuation)
+              )))
+      (funcall yatest::-waiting-continuation))))
 
 
 
@@ -266,32 +269,32 @@ TODO 非同期テストの実装
 (defun yatest::report-mode ()
   (use-local-map yatest::report-mode-map))
 
+;;(fset 'yatest::define-async-test nil)
 
-(defmacro yatest::async (&rest body)
-  ""
-  )
+(defun yatest::defasync (project name body)
+  (puthash 
+   name
+   body
+   (or (gethash project yatest::tests)
+       (let ((hash (make-hash-table :test 'eq)))
+         (puthash project hash yatest::tests)
+           hash))))
 
 (defmacro yatest::define-async-test (project name &rest body)
-  ""
-  `(puthash ',name
-            ,@body
-            ,(or (gethash ',project yatest::tests)
-                 (let ((hash (make-hash-table :test 'eq)))
-                   (puthash ',project hash yatest::tests)
-                   hash))))
+  `(yatest::defasync ',project ',name  ,body))
 
 (defmacro yatest::define-test (project name &rest body)
   "Defines new test as belongs the PROJECT."
-  `(yatest::define-async-test project name (progn ,@body (yatest::done))))
+  `(yatest::defasync
+     ',project ',name
+     '(,@body
+       (yatest::done))))
+
 
 (put 'yatest::define-test       'lisp-indent-function 'defun)
 (put 'yatest::define-async-test 'lisp-indent-function 'defun)
 (put 'yatest::async             'lisp-indent-function 'defun)
 
-(defmacro yatest::define-async-test (project name &rest body)
-  "Defines new asynchronous test."
-  ;; TODO 非同期テストの定義を書く
-  )
 
 (defun yatest::report-single (project name failed report)
   "Reports result of a test."
@@ -299,27 +302,27 @@ TODO 非同期テストの実装
     (insert
      (mapconcat
       (lambda (r)
-	(case (car r)
-	  ((:ok)
-	   (propertize
+        (case (car r)
+          ((:ok)
+           (propertize
             (format "%s ... ok!" (cadr r)) 'face 'yatest::ok-face ))
 
-	  ((:print)
+          ((:print)
            (concat 
             (propertize
              (format "%s :" (cadr r)) 'face 'yatest::print-face)
-	    (format "%S" (cddr r))))
+            (format "%S" (cddr r))))
 
-	  ((:failed)
-	   (concat
-	    (propertize
+          ((:failed)
+           (concat
+            (propertize
              (format "%s :" (cadr r)) 'face   'yatest::faild-face)
-	    (format " %s" (caddr r)))))
-	)
+            (format " %s" (caddr r)))))
+        )
       report
       "\n"))
     (if (= failed 0)
-	(message "all tests successful.")
+        (message "all tests successful.")
       (message (format "The test has %d or more errors." failed)))))
 
 (defun yatest::project-alist ()
@@ -346,42 +349,43 @@ TODO 非同期テストの実装
 
   (interactive
    (let* ((prj (intern (completing-read "project: "
-				       (yatest::project-alist) nil t)))
-	  (cands (mapcar (lambda (x) (list (symbol-name (car x))))
-			 (yatest::test-alist prj)))
-	  (name (completing-read
-		 "test: "  cands nil t)))
+                                       (yatest::project-alist) nil t)))
+          (cands (mapcar (lambda (x) (list (symbol-name (car x))))
+                         (yatest::test-alist prj)))
+          (name (completing-read
+                 "test: "  cands nil t)))
      (list prj (if (equal name "") nil (intern name)))))
 
   (let ((alist (yatest::test-alist project)))
     (if name
-	(progn
-	  (yatest::run-test (or reporter
+        (progn
+          (yatest::run-test (or reporter
                                 (function yatest::report-single))
                             project
                             name
                             (cdr (assoc name alist))))
       (let ((result ())
-	    (yatest-failed 0))
+            (yatest-failed 0))
 
-	(mapcar (lambda (x)
-		  (yatest::run-test
-		   (lambda (project name fail report)
-		     (setq result
-			   (cons
+        (mapcar (lambda (x)
+                  (yatest::run-test
+                   (lambda (project name fail report)
+                     (setq result
+                           (cons
                             (list
                              (if (> fail 0) 
-                                 (progn (setq yatest-failed (1+ yatest-failed))
+                                 (progn (setq yatest-failed
+                                              (1+ yatest-failed))
                                         :failed)
                                :ok) name) result)))
-		   project
-		   (car x)
-		   (cdr x)))
-		alist)
+                   project
+                   (car x)
+                   (cdr x)))
+                alist)
 
-	(when (interactive-p)
-	    (yatest::report-single project '*ALL* yatest-failed result))
-	  (cons yatest-failed result)))))
+        (when (interactive-p)
+            (yatest::report-single project '*ALL* yatest-failed result))
+          (cons yatest-failed result)))))
 
 (provide 'yatest)
 ;;; yatest.el ends here.
