@@ -192,13 +192,13 @@
     (throw cont (yatest::backtrace1 cont debugger-args skip))))
 
 
-(defsubst yatest::assert1 (name x)
+(defsubst yatest::assert1 (name x$)
   ""
   (let ((result (let ((debugger (lambda (&rest args)
                                   (yatest::backtrace 'yatest->eval
                                                         args
                                                         1))))
-                  (catch 'yatest->eval (eval (cons 'progn x))))))
+                  (catch 'yatest->eval (eval (cons 'progn x$))))))
     (setq yatest-report
           (cons (if (eq result t)
                     `(:ok ,name)
